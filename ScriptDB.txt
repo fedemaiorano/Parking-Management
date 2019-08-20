@@ -1,0 +1,503 @@
+drop table utentepremium;
+drop table utenteabbonato;
+drop table utente;
+drop table sensore;
+drop table ppc;
+drop table pl;
+drop table sosta;
+drop table postoauto;
+drop table pass;
+drop table parcheggio;
+
+drop type utentepremium_ty;
+drop type utenteabbonato_ty;
+drop type pl_ty;
+drop type sosta_ty;
+drop type postoauto_ty;
+drop type pass_ty;
+drop type utente_ty;
+drop type ppc_ty;
+drop type sensore_ty;
+drop type parcheggio_ty;
+
+CREATE OR REPLACE TYPE utente_ty AS OBJECT (
+cf varchar2(16),
+nome varchar2(30),
+cognome varchar2(30),
+anno_nascita integer,
+numero_patente varchar2(15)
+) NOT FINAL;
+/
+CREATE OR REPLACE TYPE utentepremium_ty UNDER utente_ty (
+nickname varchar2(30),
+passwd varchar2(8)) FINAL;
+/
+CREATE OR REPLACE TYPE utenteabbonato_ty UNDER utente_ty () NOT FINAL;
+/
+CREATE OR REPLACE TYPE parcheggio_ty AS OBJECT (
+nome varchar2(30),
+via varchar2(50),
+latitudine decimal(9,6),
+longitudine decimal(9,6)) NOT FINAL;
+/
+-- 'pl' : parcheggi liberi
+CREATE OR REPLACE TYPE pl_ty UNDER parcheggio_ty (
+durataMaxSosta number(2) 
+) FINAL;
+/
+-- 'ppc' : parcheggi a pagamento coperti
+CREATE OR REPLACE TYPE ppc_ty UNDER parcheggio_ty (
+telefono number(8),
+mail varchar2(30),
+società varchar2(50),
+postiauto integer
+) FINAL;
+/
+CREATE OR REPLACE TYPE postoauto_ty AS OBJECT (
+numero integer,
+larghezza integer,
+lunghezza integer,
+libero char(1),
+ppc varchar2(30),
+sensore ref sensore_ty
+) FINAL;
+/
+CREATE OR REPLACE TYPE sensore_ty AS OBJECT (
+codice varchar2(5),
+modello varchar2(20),
+azienda varchar2(30)
+) FINAL;
+/
+CREATE OR REPLACE TYPE sosta_ty AS OBJECT (
+codice varchar(8),
+dataInizio date,
+dataFine date,
+costo integer,
+targaAuto varchar2(10),
+ppc ref ppc_ty,
+utente ref utente_ty,
+MEMBER FUNCTION 
+CalcolaCosto 
+RETURN NUMBER
+) FINAL;
+/
+CREATE OR REPLACE TYPE BODY sosta_ty AS
+MEMBER FUNCTION
+CalcolaCosto
+RETURN NUMBER IS
+BEGIN
+RETURN  24 * (to_date(to_char(dataFine, 'YYYY-MM-DD hh24:mi'), 'YYYY-MM-DD hh24:mi') - to_date(to_char(dataInizio, 'YYYY-MM-DD hh24:mi'), 'YYYY-MM-DD hh24:mi'))*0.5;
+END;
+END;
+/
+CREATE OR REPLACE TYPE pass_ty AS OBJECT (
+codice varchar(5),
+dataRilascio date,
+scadenza date,
+NomeZona varchar2(25),
+targaAuto varchar2(10),
+ppc ref ppc_ty,
+utente ref utente_ty
+) FINAL;
+/
+--table
+CREATE TABLE Utente OF utente_ty (
+cf PRIMARY KEY,
+nome NOT NULL,
+cognome NOT NULL,
+anno_nascita NOT NULL,
+numero_patente NOT NULL
+);
+/
+CREATE TABLE UtentePremium OF utentepremium_ty (
+nickname NOT NULL,
+passwd NOT NULL
+);
+/
+CREATE TABLE UtenteAbbonato OF utenteabbonato_ty;
+/
+CREATE TABLE parcheggio OF parcheggio_ty (
+nome PRIMARY KEY,
+via NOT NULL,
+latitudine NOT NULL,
+longitudine NOT NULL
+);
+/
+CREATE TABLE PL OF pl_ty (
+durataMaxSosta NOT NULL
+);
+/
+CREATE TABLE PPC OF ppc_ty (
+nome primary key,
+telefono NOT NULL,
+mail NOT NULL,
+società NOT NULL,
+postiauto NOT NULL
+);
+/
+CREATE TABLE Sensore OF sensore_ty (
+codice PRIMARY KEY,
+modello NOT NULL,
+azienda NOT NULL
+);
+/
+CREATE TABLE PostoAuto OF postoauto_ty (
+larghezza NOT NULL,
+lunghezza NOT NULL,
+libero NOT NULL,
+sensore SCOPE IS SENSORE,
+constraint pa_fk1 foreign key(ppc) references ppc(nome),
+    primary key(numero,ppc) 
+);
+/
+CREATE TABLE Sosta OF sosta_ty (
+codice PRIMARY KEY,
+dataInizio NOT NULL,
+dataFine NOT NULL,
+targaAuto NOT NULL,
+ppc SCOPE IS PPC,
+utente SCOPE IS UTENTE
+);
+/
+CREATE TABLE Pass OF pass_ty (
+codice PRIMARY KEY,
+dataRilascio NOT NULL,
+scadenza NOT NULL,
+NomeZona NOT NULL,
+targaauto NOT NULL,
+ppc SCOPE IS PPC,
+utente SCOPE IS UTENTE
+);
+/
+--PROCEDURE e FUNZIONI
+--Procedure di popolamento
+CREATE OR REPLACE PROCEDURE popolaPPC IS
+BEGIN
+DECLARE
+n NUMBER;
+BEGIN
+n := 0;
+WHILE n < 100 LOOP
+INSERT INTO ppc VALUES(
+  ppc_ty(dbms_random.string('U', 10), dbms_random.string('L',15), 
+  round(dbms_random.value(1, 100),2),round(dbms_random.value(1, 100),2), 
+  round(dbms_random.value(1,99999999)), dbms_random.string('L',15), dbms_random.string('L',15), 
+  round(dbms_random.value(50,150))));
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+CREATE OR REPLACE PROCEDURE popolaSensore IS
+BEGIN
+DECLARE
+n NUMBER;
+BEGIN
+n := 0;
+WHILE n < 50 LOOP
+INSERT INTO Sensore VALUES(
+  sensore_ty(dbms_random.string('X', 5), dbms_random.string('L',15), dbms_random.string('L',15)));
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+CREATE OR REPLACE PROCEDURE popolaPass IS
+BEGIN
+DECLARE
+n NUMBER;
+ppc ref ppc_ty;
+ppc_nome VARCHAR2(30);
+utente ref utente_ty;
+utente_cf VARCHAR2(16);
+d date;
+BEGIN
+n := 0;
+WHILE n < 10 LOOP
+  SELECT nome INTO ppc_nome FROM (SELECT * FROM  ppc ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  SELECT cf INTO utente_cf FROM (SELECT * FROM  utente ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  d := TO_DATE(TRUNC(DBMS_RANDOM.VALUE(TO_CHAR(DATE '2000-01-01','J'),TO_CHAR(DATE '9999-12-31','J'))),'J');
+INSERT INTO pass select pass_ty(
+dbms_random.string('X', 5),
+d,
+d + 60,
+dbms_random.string('L', 15),
+dbms_random.string('X', 7),
+ref(p), 
+ref(u)) from ppc p,utente u where p.nome = ppc_nome AND u.cf = utente_cf;
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+CREATE OR REPLACE PROCEDURE popolaSosta IS
+BEGIN
+DECLARE
+n NUMBER;
+ppc ref ppc_ty;
+ppc_nome VARCHAR2(30);
+utente ref utente_ty;
+utente_cf VARCHAR2(16);
+d date;
+BEGIN
+n := 0;
+WHILE n < 10 LOOP
+  SELECT nome INTO ppc_nome FROM (SELECT * FROM  ppc ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  SELECT cf INTO utente_cf FROM (SELECT * FROM  utente ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  d := TO_DATE(TRUNC(DBMS_RANDOM.VALUE(TO_CHAR(DATE '1900-01-01','J'),TO_CHAR(DATE '2017-12-31','J'))),'J');
+INSERT INTO sosta select sosta_ty(
+dbms_random.string('X', 8),
+d,
+d + 0.25,
+0, 
+dbms_random.string('X', 7),
+ref(p), 
+ref(u)) from ppc p,utente u where p.nome = ppc_nome AND u.cf = utente_cf;
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+CREATE OR REPLACE PROCEDURE popolaUtentePREMIUM IS
+BEGIN
+DECLARE
+n NUMBER;
+BEGIN
+n := 0;
+WHILE n < 5 LOOP
+INSERT INTO UtentePremium VALUES(
+  utentepremium_ty(dbms_random.string('X', 16), dbms_random.string('L',8), dbms_random.string('L',8),
+  round(dbms_random.value(1930, 1999)), dbms_random.string('X', 15), dbms_random.string('L',8), dbms_random.string('L',8)));
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+CREATE OR REPLACE PROCEDURE popolaUtenteAbbonato IS
+BEGIN
+DECLARE
+n NUMBER;
+BEGIN
+n := 0;
+WHILE n < 300 LOOP
+INSERT INTO UtenteAbbonato VALUES(
+  utenteabbonato_ty(dbms_random.string('X', 16), dbms_random.string('L',8), dbms_random.string('L',8),
+  round(dbms_random.value(1930, 1999)), dbms_random.string('X', 15)));
+n := n + 1;
+END LOOP;
+END;
+END;
+/
+create or replace PROCEDURE popolaPostoAuto IS
+BEGIN
+DECLARE
+n NUMBER;
+m NUMBER;
+ppc_nome VARCHAR2(30);
+sensore ref utente_ty;
+sensore_codice VARCHAR2(16);
+BEGIN
+n := 0;
+WHILE n < 10 LOOP
+  SELECT nome INTO ppc_nome FROM (SELECT * FROM  ppc ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  SELECT codice INTO sensore_codice FROM (SELECT * FROM  sensore ORDER BY DBMS_RANDOM.RANDOM) WHERE rownum<2;
+  SELECT count(*) INTO m FROM postoauto WHERE ppc = ppc_nome;
+INSERT INTO postoauto select postoauto_ty(
+m+1,
+round(dbms_random.value(3,5)),
+round(dbms_random.value(3,5)),
+'1',
+ppc_nome,
+ref(s)) from sensore s where s.codice = sensore_codice;
+n := n + 1;
+END LOOP;
+END;
+END;
+--Altre procedure 
+--Op.1 Inserimento di un nuovo parcheggio a pagamento coperto
+CREATE OR REPLACE PROCEDURE InserisciPPC (nome PPC.nome%TYPE, via PPC.via%TYPE,
+lat ppc.latitudine%TYPE, lon ppc.longitudine%TYPE, tel ppc.telefono%TYPE, 
+mail ppc.mail%TYPE, soc ppc.società%TYPE, posti ppc.postiauto%TYPE) IS
+BEGIN 
+INSERT INTO PPC VALUES(nome, via, lat, lon, tel, mail, soc, posti);
+dbms_output.put_line('PPC correttamente inserito');
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('PPC non inserito');
+END;
+/
+--Op.2 Registrazione di un nuovo utente
+CREATE OR REPLACE PROCEDURE InserisciUtente (cf utente.cf%TYPE, nome utente.nome%TYPE,
+cognome utente.cognome%TYPE, annoNasc utente.anno_nascita%TYPE, numPat utente.numero_patente%TYPE) IS
+BEGIN 
+INSERT INTO utente VALUES(cf, nome, cognome, annoNasc, numPat);
+dbms_output.put_line('Utente correttamente registrato');
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Utente non registrato');
+END;
+/
+--Op.3 Inserimento di una sosta in un PPC
+create or replace
+PROCEDURE InserisciSosta (dataI sosta.datainizio%TYPE,
+dataF sosta.datafine%TYPE, costo sosta.costo%TYPE, targaauto sosta.targaauto%TYPE, ppc_nome ppc.nome%TYPE, utente_cf utente.cf%TYPE) IS
+BEGIN
+INSERT INTO sosta select sosta_ty(
+dbms_random.string('X',5),
+dataI,
+dataF,
+costo,
+targaauto,
+ref(p), 
+ref(u)) from ppc p,utente u where p.nome = ppc_nome AND u.cf = utente_cf;
+dbms_output.put_line('Sosta correttamente inserita');
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Sosta non inserita');
+END;
+/
+--Op.4 Stampa dei posti disponibili in un ppc
+create or replace PROCEDURE StampaPostiDisponibiliPPC (nome ppc.nome%TYPE) IS
+BEGIN
+DECLARE 
+n number;
+BEGIN
+SELECT count(*) INTO n FROM postoauto p WHERE p.ppc = nome AND libero = '1';
+dbms_output.put_line('Posti disponibili nel ppc ' || nome || ' : ' || n); 
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Stampa non riuscita');
+END;
+END;
+/
+--Op.5 Cancellazione di utenti inattivi da 6 mesi
+create or replace procedure cancellaUtentiInattivi IS
+BEGIN
+  FOR utenti IN (SELECT deref(utente).cf AS cf FROM sosta WHERE datafine<sysdate-(30*6))
+  LOOP
+    delete from pass WHERE deref(utente).cf = utenti.cf;
+    delete from sosta WHERE deref(utente).cf = utenti.cf;
+    delete from utente where cf = utenti.cf;
+  END LOOP;
+END;
+/
+--Op.6 Acquisto di un pass
+CREATE OR REPLACE PROCEDURE AcquistaPASS (ppc_nome ppc.nome%TYPE, utente_cf utente.cf%TYPE, dataScadenza pass.scadenza%TYPE, nomezona pass.nomeZona%TYPE, targaauto pass.targaAuto%TYPE) IS
+BEGIN
+DECLARE
+utente_nome utente.nome%TYPE;
+BEGIN
+SELECT nome INTO utente_nome FROM utente u WHERE u.cf = utente_cf;
+INSERT INTO pass select pass_ty(
+dbms_random.string('X', 5),
+SYSDATE,
+dataScadenza,
+nomeZona,
+targaauto,
+ref(p), 
+ref(u)) from ppc p,utente u where p.nome = ppc_nome AND u.cf = utente_cf;
+dbms_output.put_line('Acquisto pass riuscito');
+dbms_output.put_line('Venduto da ppc ' || ppc_nome || ' ad utente ' || utente_nome);
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Acquisto pass non riuscito');
+END;
+END;
+/
+--Op.7 Stampa del guadagno giornaliero di un ppc
+CREATE OR REPLACE PROCEDURE StampaGuadagnoGiornalieroPPC (nome ppc.nome%TYPE, dataF sosta.datafine%TYPE) IS
+BEGIN
+DECLARE 
+n number;
+BEGIN
+SELECT sum(costo) INTO n FROM sosta s WHERE deref(s.ppc).nome = nome AND s.dataFine like dataF;
+dbms_output.put_line('Guadagno ppc ' || nome || ' in data ' || to_date(dataF,'DD-Mon-YY') || ' uguale a ' || n);
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Stampa non riuscita');
+END;
+END;
+/
+--Op.8 Modifica di un parcheggio a seguito dell'acquisto di un set sensori
+CREATE OR REPLACE PROCEDURE ModificaPPCSensori (nome ppc.nome%TYPE, sensoreCod sensore.codice%TYPE) IS
+BEGIN
+DECLARE 
+n number;
+m number;
+BEGIN
+n := 0;
+SELECT count(*) INTO m FROM postoauto pa WHERE pa.ppc = nome;
+WHILE n < m LOOP
+update postoauto p set sensore = (SELECT ref(s) FROM sensore s WHERE s.codice = sensoreCod ) WHERE p.ppc = nome;
+n := n + 1;
+END LOOP;
+dbms_output.put_line('Modifiche correttamente avvenute');
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Modifiche non riuscite');
+END;
+END;
+/
+
+--Trigger
+create or replace trigger calcolacostososta 
+after insert on sosta
+BEGIN 
+update sosta s set costo = s.calcolacosto() where codice = codice;
+END;
+/
+create or replace trigger aggiornaTabellaUtente1
+after insert on utentepremium
+for each row
+BEGIN
+INSERT INTO UTENTE VALUES(:new.cf,:new.nome,:new.cognome,:new.anno_nascita,:new.numero_patente);
+END;
+/
+create or replace trigger aggiornaTabellaUtente2
+after insert on utenteabbonato
+for each row
+BEGIN
+INSERT INTO UTENTE VALUES(:new.cf,:new.nome,:new.cognome,:new.anno_nascita,:new.numero_patente);
+END;
+/
+create or replace
+trigger aggiornaDipendenzeUtente
+after delete on utente
+for each row
+BEGIN
+DECLARE
+n number;
+BEGIN
+SELECT COUNT(*) INTO n FROM utenteabbonato WHERE cf = :old.cf;
+IF (n>0) then 
+  DELETE from utenteabbonato WHERE cf = :old.cf;
+END IF;
+SELECT COUNT(*) INTO n FROM utentepremium WHERE cf = :old.cf;
+IF (n>0) then
+  DELETE from utentepremium WHERE cf = :old.cf;
+END IF;
+END;
+END;
+/
+--Executing procedures
+/*
+exec PopolaSensore;
+exec PopolaPPC;
+exec PopolaPostoAuto;
+
+exec popolaUtentePremium;
+exec popolaUtenteAbbonato;
+exec PopolaPASS;
+exec PopolaSosta;
+
+
+
+SET SERVEROUTPUT ON;
+exec inserisciPPC('w44w1','ww',12,12,12,'ww','ww',12);
+exec inserisciutente('ww1','ww','ww','1999','auaa');
+exec inserisciSosta('02-Feb-2017', '02-Feb-17', 0, 'aaaa', 'SZMFUQYNIA', 'CBY5NMPOOICDLH8F');
+exec stampaPostiDisponibiliPPC('XEIPPLDGDQ');
+exec acquistaPass('ww1','ww1',SYSDATE+10,'bari vecchia','BA12IW');
+exec stampaGuadagnoGiornalieroPPC('ww1','24-FEB-17');
+exec ModificaPPCSensori('QRZPSVCMZZ', '9KS7U');
+*/
